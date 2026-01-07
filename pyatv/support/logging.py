@@ -90,9 +90,9 @@ def _format_object(obj, keyNames=None, padding="", first=True) -> str:
 
 
 def log_request(logger, request: HttpRequest, message_prefix="", x:int=-1) -> None:
-    log_request2(logger, request.method, request.path, request.headers, request.body, message_prefix, x)
+    log_request_info(logger, request.method, request.path, request.headers, request.body, message_prefix, x)
 
-def log_request2(logger, method, path, headers, body, message_prefix="", x:int=-1) -> None:
+def log_request_info(logger, method, path, headers, body, message_prefix="", x:int=-1) -> None:
     """Log an AirPlay request with optional binary plist body."""
 
     log_http(logger, path, headers, body, message_prefix + f"> {method} {path}", x)

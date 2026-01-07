@@ -8,6 +8,7 @@ import logging
 import pathlib
 import plistlib
 import re
+
 from typing import (
     Any,
     Callable,
@@ -28,6 +29,13 @@ from requests.structures import CaseInsensitiveDict
 from pyatv import const, exceptions
 from pyatv.support import log_binary
 from pyatv.support.net import unused_port
+from pyatv.support.logging import log_request_info, log_response
+
+import biplist
+
+from pyatv.support.hap_tlv8 import (
+    read_tlv
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -451,6 +459,8 @@ class HttpConnection(asyncio.Protocol):
             method, uri, protocol, user_agent, content_type, headers, body
         )
 
+        log_request_info(_LOGGER.network, method, uri, headers, body, f"{self.transport.get_extra_info('sockname')[1]} > {self.transport.get_extra_info('peername')[1]}: ")
+
         _LOGGER.debug("Sending %s message: %s", protocol, output)
         if self.transport is None:
             raise RuntimeError("not connected to remote")
@@ -479,6 +489,7 @@ class HttpConnection(asyncio.Protocol):
                 self._requests.remove(pending_request)
 
         _LOGGER.debug("Got %s response: %s:", response.protocol, response)
+        log_response(_LOGGER.network, response, f"{self.transport.get_extra_info('sockname')[1]} < {self.transport.get_extra_info('peername')[1]}: ", -1, uri)
 
         if response.code == 403:
             raise exceptions.AuthenticationError("not authenticated")
@@ -673,3 +684,38 @@ async def create_session(
 ) -> ClientSessionManager:
     """Create aiohttp ClientSession managed by pyatv."""
     return ClientSessionManager(session or ClientSession(), session is None)
+
+
+def encode_plist_body(data: Any):
+    """Encode a binary plist payload."""
+    return biplist.writePlistToString(data)
+    # return plistlib.dumps(
+    #     data,
+    #     fmt=plistlib.FMT_BINARY,  # pylint: disable=no-member
+    # )
+
+
+def decode_plist_body(body: Union[str, bytes, Dict[Any, Any]]) -> Any:
+    """Decode a binary plist payload."""
+    try:
+        if isinstance(body, Dict):
+            return body
+        return biplist.readPlistFromString(body)
+#        return plistlib.loads(body if isinstance(body, bytes) else body.encode("utf-8"))
+#    except plistlib.InvalidFileException:
+    except (biplist.InvalidPlistException, biplist.NotBinaryPlistException):
+        return None
+
+def decode_tlv_body(body: Union[str, bytes, Dict[Any, Any]]) -> Any:
+    body = (
+        body
+        if isinstance(body, bytes)
+        else body.encode("utf-8")
+    ) if body else b''
+
+    if body[0:4] == b'FPLY':
+        return None
+    
+    data = read_tlv(body)
+    return data
+
