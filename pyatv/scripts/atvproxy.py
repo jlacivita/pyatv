@@ -1145,7 +1145,7 @@ class AirPlayAppleTVProxy(BasicHttpServer, BaseAirPlayServerAuth):
     async def _handle_pair_verify_2(self, request):
         await self.verifier.verify_credentials_seq2(request)
 
-        output_key, input_key, cert = self.verifier.encryption_keys(
+        output_key, input_key = self.verifier.encryption_keys(
             CONTROL_SALT, CONTROL_OUTPUT_INFO, CONTROL_INPUT_INFO
         )
         # Wire up encrypt and decrypt keys for Sender <-> Proxy
@@ -1153,9 +1153,6 @@ class AirPlayAppleTVProxy(BasicHttpServer, BaseAirPlayServerAuth):
         session.enable(output_key, input_key)
         self.connection.receive_processor = session.decrypt
         self.connection.send_processor = session.encrypt
-
-        # Copy the cert from the ATV/Receiver so we can send it to the Sender
-        self.certificate(cert)
 
         return super().handle_pair_verify(request)
 
