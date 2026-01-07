@@ -1,7 +1,6 @@
 import textwrap
 from pyatv.support.plist import decode_plist_body
-from pyatv.support.hap_tlv8 import decode_tlv_body
-from pyatv.support.http import HttpRequest, HttpResponse
+from pyatv.support.hap_tlv8 import decode_tlv_body, TlvValue
 from typing import Dict, Any, Mapping
 import logging
 
@@ -89,7 +88,7 @@ def _format_object(obj, keyNames=None, padding="", first=True) -> str:
     return result
 
 
-def log_request(logger, request: HttpRequest, message_prefix="", x:int=-1) -> None:
+def log_request(logger, request: Any, message_prefix="", x:int=-1) -> None:
     log_request_info(logger, request.method, request.path, request.headers, request.body, message_prefix, x)
 
 def log_request_info(logger, method, path, headers, body, message_prefix="", x:int=-1) -> None:
@@ -97,7 +96,7 @@ def log_request_info(logger, method, path, headers, body, message_prefix="", x:i
 
     log_http(logger, path, headers, body, message_prefix + f"> {method} {path}", x)
 
-def log_response(logger, response: HttpResponse, message_prefix="", x:int=-1, req_path="") -> None:
+def log_response(logger, response: Any, message_prefix="", x:int=-1, req_path="") -> None:
     """Log an AirPlay response with optional binary plist body."""
 
     log_http(logger, req_path, response.headers, response.body, message_prefix + f"< {req_path} {response.code}", x)
