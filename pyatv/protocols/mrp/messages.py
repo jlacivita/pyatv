@@ -5,7 +5,7 @@ from typing import List
 from uuid import uuid4
 
 from pyatv import const
-from pyatv.auth import hap_tlv8
+from pyatv.support import hap_tlv8
 from pyatv.protocols.mrp import protobuf
 from pyatv.settings import InfoSettings
 

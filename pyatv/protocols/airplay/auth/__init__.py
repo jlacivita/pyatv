@@ -113,6 +113,7 @@ async def verify_connection(
         session.enable(output_key, input_key)
         connection.receive_processor = session.decrypt
         connection.send_processor = session.encrypt
+        _LOGGER.debug('HAP session created with encryption keys')
 
     return verifier
 

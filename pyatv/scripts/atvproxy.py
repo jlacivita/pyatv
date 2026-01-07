@@ -29,18 +29,18 @@ from pyatv.protocols.airplay.ap2_session import (
     EVENTS_SALT,
     EVENTS_WRITE_INFO,
 )
-from pyatv.protocols.airplay.auth import extract_credentials, verify_connection
+from pyatv.protocols.airplay.auth import extract_credentials, pair_verify, CONTROL_SALT, CONTROL_OUTPUT_INFO, CONTROL_INPUT_INFO
 from pyatv.protocols.airplay.channels import (
     BaseDataStreamChannel,
     BaseEventChannel,
     DataStreamMessage,
 )
 from pyatv.protocols.airplay.server_auth import BaseAirPlayServerAuth
-from pyatv.protocols.airplay.utils import (
-    decode_plist_body,
-    encode_plist_body,
+from pyatv.support.plist import decode_plist_body, encode_plist_body
+from pyatv.support.logging import (
     log_request,
     log_response,
+    NETWORK
 )
 from pyatv.protocols.companion.connection import (
     AUTH_TAG_LENGTH,
@@ -152,7 +152,7 @@ class MrpAppleTVProxy(MrpServerAuth, asyncio.Protocol):
     def send_to_client(self, message: ProtobufMessage):
         """Send protobuf message to client."""
         data = message.SerializeToString()
-        _LOGGER.info("<<(DECRYPTED): %s", message)
+        _LOGGER.debug("<<(DECRYPTED): %s", message)
         if self.chacha:
             data = self.chacha.encrypt(data)
             log_binary(_LOGGER, "<<(ENCRYPTED)", Message=message)
@@ -166,7 +166,7 @@ class MrpAppleTVProxy(MrpServerAuth, asyncio.Protocol):
         parsed.ParseFromString(raw)
 
         log_binary(_LOGGER, "ATV->APP", Raw=raw)
-        _LOGGER.info("ATV->APP Parsed: %s", parsed)
+        _LOGGER.debug("ATV->APP Parsed: %s", parsed)
         if self.chacha:
             raw = self.chacha.encrypt(raw)
             log_binary(_LOGGER, "ATV->APP", Encrypted=raw)
@@ -635,14 +635,14 @@ class AirPlayEventChannelAppleTVProxy(AirPlayChannelAppleTVProxy, BaseEventChann
         """Process data from client before proxying."""
         response, consumed, rest = self.parse_response(data)
         if response:
-            log_response(_LOGGER, response, message_prefix=f"{self.name} ")
+            log_response(_LOGGER.network, response, message_prefix=f"{self.name} ")
         return consumed, rest
 
     def process_remote_buffer(self, data: bytes) -> Tuple[bytes, bytes]:
         """Process data from remote before proxying."""
         request, consumed, rest = self.parse_request(data)
         if request:
-            log_request(_LOGGER, request, message_prefix=f"{self.name} ")
+#            log_request(_LOGGER.debug, request, message_prefix=f"{self.name} ")
             decoded_data = decode_plist_body(request.body)
             if request.path == "/command" and decoded_data.get("type") == "updateInfo":
                 return (
@@ -1001,10 +1001,11 @@ class AirPlayAppleTVProxy(BasicHttpServer, BaseAirPlayServerAuth):
 
     async def start(self) -> None:
         """Start the proxy instance."""
+        # There's a race condition here... sometimes /pair-verify comes in right after this line
         self.connection = await http_connect(self.address, self.port)
-        self.verifier = await verify_connection(
-            extract_credentials(self.service), self.connection
-        )
+        # and before the next one, which is needed...
+        self.verifier = pair_verify(extract_credentials(self.service), self.connection)
+
         self._connected_event.set()
 
     def enable_encryption(self, output_key: bytes, input_key: bytes) -> None:
@@ -1014,12 +1015,13 @@ class AirPlayAppleTVProxy(BasicHttpServer, BaseAirPlayServerAuth):
 
     def connection_made(self, transport):
         """Client did connect to proxy."""
-        _LOGGER.debug("Client connected to AirPlay proxy")
+        _LOGGER.info("Client connected to AirPlay proxy")
+
         self.transport = transport
 
     def connection_lost(self, exc):
         """Handle that connection was lost to client."""
-        _LOGGER.debug("Connection lost to client device: %s", exc)
+        _LOGGER.info("Connection lost to client device: %s", exc)
         self.connection.close()
         for channel_server in self._channel_servers.values():
             channel_server.close()
@@ -1049,53 +1051,113 @@ class AirPlayAppleTVProxy(BasicHttpServer, BaseAirPlayServerAuth):
     async def _handle_info(self, request: HttpRequest):
         response = await self.send_to_atv(request)
         response_data = decode_plist_body(response.body) or {}
+
         return response._replace(
             body=encode_plist_body(self._rewrite_info(response_data)),
         )
 
     def _rewrite_info(self, info: Mapping[str, Any]) -> Mapping[str, Any]:
         output = dict(info)
+
+        # deviceid A unique identifier for the AirPlay receiver, which historically was the device's MAC address (e.g., F0:B3:EC:2E:52:68). For security reasons and privacy enhancements, Apple has changed this behavior in newer operating systems (tvOS 18+, macOS 15+) where devices no longer advertise their MAC address.
+        # pi Short for Pairing Identity, this is a unique identifier (often a UUID, like 5ffebd77-69fc-49d3-b7a6-15ff6ab47da8) used in the authentication process to link the source device with the receiver.
+        # psi Stands for Pairing Session Identifier (or Local AirPlay Receiver Pairing Identity). It is used to manage the specific secure session between two devices that have already been paired or are in the process of pairing.
+        # pk Refers to the Public Key of the device. This key is used during the secure pairing and verification process to establish a trusted connection, ensuring that only authorized and verified devices can stream content. 
+
         if "psi" in info:
             output["psi"] = SERVER_IDENTIFIER
+            _LOGGER.info(f"  Proxy changed psi: %s -> %s", str(info["psi"]), str(output["psi"]))
         if "name" in info:
             output["name"] = DEVICE_NAME
+            _LOGGER.info(f"  Proxy changed name: %s -> %s", str(info["name"]), str(output["name"]))
         if "senderAddress" in info:
             output["senderAddress"] = f"{self.client_ip}:{self.client_port}"
+            _LOGGER.info(f"  Proxy changed senderAddress: %s -> %s", str(info["senderAddress"]), str(output["senderAddress"]))
         if "deviceID" in info:
             output["deviceID"] = shift_hex_identifier(info["deviceID"])
+            _LOGGER.info(f"  Proxy changed deviceID: %s -> %s", str(info["deviceID"]), str(output["deviceID"]))
         if "pi" in info:
             output["pi"] = shift_hex_identifier(output["pi"])
+            _LOGGER.info(f"  Proxy changed pi: %s -> %s", str(info["pi"]), str(output["pi"]))
         if "txtAirPlay" in info:
             dns_txt = info["txtAirPlay"]
             dns_data = {
                 k: v if isinstance(v, str) else v.decode()
                 for k, v in parse_txt_dict(BytesIO(dns_txt), len(dns_txt)).items()
             }
-            output["txtAirPlay"] = format_txt_dict(self._rewrite_dns_txt(dns_data))
+            _LOGGER.info(f"  Proxy changed txtAirPlay:")
+            output["txtAirPlay"] = format_txt_dict(self._rewrite_dns_txt(dns_data, _LOGGER.info))
         if "pk" in info:
             output["pk"] = BaseAirPlayServerAuth.keys.auth_pub
+            _LOGGER.info(f"  Proxy changed pk: %s -> %s", str(info["pk"]), str(output["pk"]))
         if "macAddress" in info:
             output["macAddress"] = shift_hex_identifier(info["macAddress"])
+            _LOGGER.info(f"  Proxy changed macAddress: %s -> %s", str(info["macAddress"]), str(output["macAddress"]))
+
         return output
 
     @staticmethod
-    def _rewrite_dns_txt(info: Mapping[str, str]) -> Mapping[str, str]:
+    def _rewrite_dns_txt(info: Mapping[str, str], logger=lambda *args: None) -> Mapping[str, str]:
         output = dict(info)
         if "btaddr" in info and info["btaddr"] != "00:00:00:00:00:00":
             output["btaddr"] = BLUETOOTH_ADDRESS
+            logger("    .btaddr: %s -> %s", str(info["btaddr"]), str(output["btaddr"]))
         if "deviceid" in info:
             output["deviceid"] = shift_hex_identifier(info["deviceid"])
+            logger("    .deviceid: %s -> %s", str(info["deviceid"]), str(output["deviceid"]))
         if "pi" in info:
             output["pi"] = shift_hex_identifier(output["pi"])
+            logger("    .pi: %s -> %s", str(info["pi"]), str(output["pi"]))
         if "psi" in info:
             output["psi"] = SERVER_IDENTIFIER
+            logger("    .psi: %s -> %s", str(info["psi"]), str(output["psi"]))
         if "pk" in info:
             output["pk"] = binascii.hexlify(
                 BaseAirPlayServerAuth.keys.auth_pub
             ).decode()
+            logger("    .pk: %s -> %s", str(info["pk"]), str(output["pk"]))
         if "gid" in info:
             output["gid"] = shift_hex_identifier(info["gid"])
+            logger("    .gid: %s -> %s", str(info["gid"]), str(output["gid"]))
+        
         return output
+
+    def handle_pair_verify(self, request: HttpRequest):
+        """Handle incoming /pair-verify request."""
+        # Intercept pair-verify handshake to set up Sender <-> Proxy keys
+
+        # Use the Sender request to trigger Proxy <-> Reciever, e.g. AppleTV, keys
+        # And pass along the request so we can use the same headers, etc.
+        if (self.verifier == None or self.verifier.sequence() == 0):
+            response = super().handle_pair_verify(request)
+            if (response.code >= 300):
+                return response
+            return self.loop.create_task(self._handle_pair_verify_1(request, response))
+        else:
+            return self.loop.create_task(self._handle_pair_verify_2(request))
+        
+    async def _handle_pair_verify_1(self, request, response):
+        await self._connected_event.wait()
+
+        await self.verifier.verify_credentials_seq1(request)
+        return response
+    
+    async def _handle_pair_verify_2(self, request):
+        await self.verifier.verify_credentials_seq2(request)
+
+        output_key, input_key, cert = self.verifier.encryption_keys(
+            CONTROL_SALT, CONTROL_OUTPUT_INFO, CONTROL_INPUT_INFO
+        )
+        # Wire up encrypt and decrypt keys for Sender <-> Proxy
+        session = HAPSession()
+        session.enable(output_key, input_key)
+        self.connection.receive_processor = session.decrypt
+        self.connection.send_processor = session.encrypt
+
+        # Copy the cert from the ATV/Receiver so we can send it to the Sender
+        self.certificate(cert)
+
+        return super().handle_pair_verify(request)
 
     def handle_setup(self, request: HttpRequest):
         """Handle incoming SETUP request."""
@@ -1169,8 +1231,14 @@ class AirPlayAppleTVProxy(BasicHttpServer, BaseAirPlayServerAuth):
             request_data_streams, response_data_streams
         ):
             stream_id = response_stream["streamID"]
-            stream_port = response_stream["dataPort"]
-            stream_seed = request_stream["seed"]
+            stream_port = 554
+            stream_seed = None
+
+            if "dataPort" in response_stream:
+                stream_port = response_stream["dataPort"]
+
+            if "seed" in response_stream:
+                stream_seed = request_stream["seed"]
 
             proxy_port = await self._create_channel_server(
                 f"Data stream {stream_id}",
@@ -1254,7 +1322,8 @@ class AirPlayAppleTVProxy(BasicHttpServer, BaseAirPlayServerAuth):
         self, request: HttpRequest
     ) -> Optional[Union[HttpResponse, asyncio.Task]]:
         """Dispatch request to correct handler method or proxy to remote device."""
-        log_request(_LOGGER, request)
+
+#        log_request(_LOGGER.info, request, "", 160)
         response = super().handle_request(request)
         if response is not None:
             return response
@@ -1263,10 +1332,16 @@ class AirPlayAppleTVProxy(BasicHttpServer, BaseAirPlayServerAuth):
         task = self.loop.create_task(self.send_to_atv(request))
         return task
 
+    def _send_response(self, resp):
+#        log_response(_LOGGER.info, resp, "", 160)
+        return super()._send_response(resp)
+
     async def send_to_atv(self, request: HttpRequest) -> HttpResponse:
         """Forward request to remote device (ATV)."""
         await self._connected_event.wait()
         assert self.connection is not None
+
+#        log_request(_LOGGER.info, request, "  Receiver ", 160)
         response = await self.connection.send_and_receive(
             method=request.method,
             uri=request.path,
@@ -1278,7 +1353,9 @@ class AirPlayAppleTVProxy(BasicHttpServer, BaseAirPlayServerAuth):
             },
             body=request.body,
         )
-        log_response(_LOGGER, response)
+
+#        log_response(_LOGGER.info, response, "  Receiver ", 160)
+
         return response._replace(
             headers={
                 k: v
@@ -1448,6 +1525,32 @@ async def publish_airplay_service(
         )
     )
 
+    properties = {
+        'acl': '0',
+        'deviceid': 'A2:D0:5B:6B:40:4A', #'A1:D0:5B:6B:40:4A',
+        # Feature set for generic AirPlay 2 support *without* MFi requirement flags
+        'features': '0x21F8AD0', 
+        'fex': '0Ip/AEbPiwNACA', 
+        'rsf': '0x1', # Software authentication
+        'fv': 'p20.T-PTMAKUC-1710.0',
+        'at': '0x1',
+        'flags': '0x244',
+        # Changed Model/Manufacturer to generic names
+        'model': 'AirPlay-Receiver', 
+        'integrator': 'Generic', 
+        'manufacturer': 'OpenSource', 
+        'serialnumber': '0DHA3CRT400791D',
+        'protovers': '1.1',
+        'srcvers': '377.40.00',
+        # Removed HomeKit/HAP keys entirely, they are the main MFi triggers
+        # 'pi': '42:15:CC:73:43:ED', 
+        # 'psi': '5D797FD3-3538-427E-A47B-A32FC6CF3A6A', 
+        # 'gid': '01000000-0000-0000-0000-4115CC7343ED', 
+        'gcgl': '0',
+        # 'pk': 'e734ea6c2b6257de72355e472aa05a4c487e6b463c029ed306df2f01b5636b58',
+        'am': '2' # Explicitly stating password authentication method
+    }
+
     return await mdns.publish(
         asyncio.get_event_loop(),
         mdns.Service(
@@ -1572,8 +1675,30 @@ async def _start_airplay_proxy(loop, args, zconf):
     _LOGGER.debug("Binding to local address %s", args.local_ip)
 
     service_type = "_airplay._tcp.local"
-    resp = await mdns.unicast(loop, args.remote_ip, [service_type])
-    service = next((s for s in resp.services if s.type == service_type), None)
+
+    service = None
+    error = None
+    try:
+        resp = await mdns.unicast(loop, args.remote_ip, [service_type])
+        service = next((s for s in resp.services if s.type == service_type), None)
+
+    except TimeoutError as e1:
+        # some non-Apple AirPlay decives don't support unicast mdns
+        # so try multicast, instead
+        _LOGGER.warning('Unicast connection failed, attempting Multicast...')
+        try: 
+            for response in (await mdns.multicast(loop, [service_type])):
+                for x in response.services:
+                    if str(x.address) == args.remote_ip:
+                        service = x
+                        break
+        except Exception as e2:
+            error = e2
+        error = e1
+
+    if not service:
+        _LOGGER.warning('Connection failed')
+        return None
 
     if not args.remote_port:
         args.remote_port = service.port
@@ -1617,7 +1742,6 @@ async def _start_relay(loop, args, zconf):
     server.close()
     return unpublisher
 
-
 async def appstart(loop):
     """Start the asyncio event loop and runs the application."""
     parser = argparse.ArgumentParser()
@@ -1657,13 +1781,15 @@ async def appstart(loop):
 
     # To get logging from pyatv
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=NETWORK,
         stream=sys.stdout,
         datefmt="%Y-%m-%d %H:%M:%S",
-        format="%(asctime)s %(levelname)s [%(name)s]: %(message)s",
+        format="%(asctime)s: %(message)s", # "%(asctime)s %(levelname)s [%(name)s]: %(message)s",
     )
 
     log_current_version()
+
+    _LOGGER.network('Testing NETWORK level')
 
     zconf = Zeroconf()
     if args.command == "mrp":
@@ -1685,9 +1811,13 @@ async def appstart(loop):
 
 def main():
     """Application start here."""
-    loop = asyncio.get_event_loop()
-    return loop.run_until_complete(appstart(loop))
-
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    loop.run_until_complete(appstart(loop))
+    loop.close()
 
 if __name__ == "__main__":
     sys.exit(main())

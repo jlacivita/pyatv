@@ -15,7 +15,7 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import (
 from srptools import SRPContext, SRPServerSession, constants
 
 from pyatv.auth.hap_srp import hkdf_expand
-from pyatv.auth.hap_tlv8 import ErrorCode, TlvValue, read_tlv, write_tlv
+from pyatv.support.hap_tlv8 import ErrorCode, TlvValue, read_tlv, write_tlv
 from pyatv.auth.server_auth import PIN_CODE, PRIVATE_KEY, SERVER_IDENTIFIER
 from pyatv.protocols.companion.connection import FrameType
 from pyatv.support import chacha20, log_binary, opack

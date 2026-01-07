@@ -11,7 +11,7 @@ from copy import copy
 import logging
 from typing import Any, Dict, Tuple
 
-from pyatv.auth import hap_tlv8
+from pyatv.support import hap_tlv8
 from pyatv.auth.hap_pairing import PairVerifyProcedure
 from pyatv.auth.hap_srp import SRPAuthHandler, hkdf_expand
 from pyatv.exceptions import InvalidResponseError

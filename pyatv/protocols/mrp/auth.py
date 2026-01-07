@@ -9,7 +9,7 @@ from pyatv.auth.hap_pairing import (
     PairSetupProcedure,
     PairVerifyProcedure,
 )
-from pyatv.auth.hap_tlv8 import TlvValue, read_tlv, stringify
+from pyatv.support.hap_tlv8 import TlvValue, read_tlv, stringify
 from pyatv.protocols.mrp import messages
 from pyatv.support import log_binary
 

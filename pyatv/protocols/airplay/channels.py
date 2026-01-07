@@ -9,8 +9,9 @@ from random import randrange
 from typing import Any, List, NamedTuple, Optional, Tuple
 
 from pyatv.auth.hap_channel import AbstractHAPChannel
-from pyatv.protocols.airplay.utils import decode_plist_body, encode_plist_body
 from pyatv.protocols.mrp import protobuf
+from pyatv.support.logging import log_request
+from pyatv.support.plist import decode_plist_body, encode_plist_body
 from pyatv.support.http import (
     HttpRequest,
     HttpResponse,
@@ -70,7 +71,8 @@ class EventChannel(BaseEventChannel):
                     _LOGGER.debug("Not enough data to parse request on event channel")
                     break
 
-                _LOGGER.debug("Got message on event channel: %s", request)
+                _LOGGER.warning("Got message on event channel:")
+                log_request(_LOGGER.network, request)
 
                 # Send a positive response to satisfy the other end of the channel
                 headers = {

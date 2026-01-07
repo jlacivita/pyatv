@@ -2,7 +2,7 @@
 
 from collections import OrderedDict
 
-from pyatv.auth.hap_tlv8 import (
+from pyatv.support.hap_tlv8 import (
     ErrorCode,
     Method,
     State,

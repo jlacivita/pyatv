@@ -23,7 +23,7 @@ from srptools import SRPClientSession, SRPContext, constants
 
 from pyatv import exceptions
 from pyatv.auth.hap_pairing import HapCredentials
-from pyatv.auth.hap_tlv8 import TlvValue, read_tlv, write_tlv
+from pyatv.support.hap_tlv8 import TlvValue, read_tlv, write_tlv
 from pyatv.support import chacha20, log_binary, opack
 
 _LOGGER = logging.getLogger(__name__)

@@ -4,11 +4,16 @@ Note that this implementation only supports one level of value, i.e. no dicts
 in dicts.
 """
 
-# pylint: disable=invalid-name
-
 from enum import IntEnum
-from typing import List
 
+from typing import (
+    Any,
+    Dict,
+    Union,
+    List
+)
+
+# pylint: disable=invalid-name
 
 class TlvValue(IntEnum):
     """Correspond to TLV values in HAP specification."""
@@ -156,3 +161,18 @@ def stringify(data: dict) -> str:
         else:
             output.append(f"{key_type.name}={len(value)}bytes")
     return ", ".join(output)
+
+
+def decode_tlv_body(body: Union[str, bytes, Dict[Any, Any]]) -> Any:
+    body = (
+        body
+        if isinstance(body, bytes)
+        else body.encode("utf-8")
+    ) if body else b''
+
+    if body[0:4] == b'FPLY':
+        return None
+    
+    data = read_tlv(body)
+    return data
+

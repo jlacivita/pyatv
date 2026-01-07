@@ -4,7 +4,7 @@ from copy import copy
 import logging
 from typing import Any, Dict, Optional, Tuple
 
-from pyatv.auth import hap_tlv8
+from pyatv.support import hap_tlv8
 from pyatv.auth.hap_pairing import (
     HapCredentials,
     PairSetupProcedure,
